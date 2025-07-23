@@ -2,6 +2,7 @@ const express = require('express');
 const mongoose = require('mongoose');
 const cors = require('cors');
 const helmet = require('helmet');
+const path = require('path');
 require('dotenv').config();
 
 const app = express();
@@ -22,13 +23,24 @@ app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 // MongoDB connection with proper error handling
 const connectDB = async () => {
     try {
-        const mongoURI = process.env.MONGODB_URI || process.env.DATABASE_URL;
+        // Try multiple environment variable names
+        const mongoURI = process.env.MONGODB_URI || 
+                         process.env.DATABASE_URL || 
+                         process.env.MONGO_URL ||
+                         process.env.MONGODB_CONNECTION_STRING;
         
         if (!mongoURI) {
-            throw new Error('MongoDB URI is not defined in environment variables');
+            console.error('❌ MongoDB URI is not defined in environment variables');
+            console.error('Available environment variables:', Object.keys(process.env).filter(key => 
+                key.toLowerCase().includes('mongo') || 
+                key.toLowerCase().includes('database') ||
+                key.toLowerCase().includes('db')
+            ));
+            throw new Error('MongoDB URI is not defined. Please set MONGODB_URI environment variable.');
         }
 
-        console.log('Attempting to connect to MongoDB...');
+        console.log('🔄 Attempting to connect to MongoDB...');
+        console.log('📍 Using URI:', mongoURI.replace(/\/\/([^:]+):([^@]+)@/, '//***:***@')); // Hide credentials in logs
         
         const conn = await mongoose.connect(mongoURI, {
             useNewUrlParser: true,
@@ -57,8 +69,15 @@ const connectDB = async () => {
 
     } catch (error) {
         console.error('❌ MongoDB connection failed:', error.message);
-        // Don't exit the process, let it retry
-        setTimeout(connectDB, 5000); // Retry after 5 seconds
+        
+        // Only retry if it's a network error, not a configuration error
+        if (error.message.includes('not defined')) {
+            console.error('⚠️ Configuration error - stopping retry attempts');
+            return;
+        }
+        
+        console.log('🔄 Retrying connection in 5 seconds...');
+        setTimeout(connectDB, 5000);
     }
 };
 
@@ -96,10 +115,12 @@ app.get('/health', (req, res) => {
         timestamp: new Date().toISOString(),
         uptime: process.uptime(),
         database: mongoose.connection.readyState === 1 ? 'connected' : 'disconnected',
-        environment: process.env.NODE_ENV || 'development'
+        environment: process.env.NODE_ENV || 'development',
+        mongoUri: process.env.MONGODB_URI ? 'configured' : 'missing'
     };
     
-    res.status(200).json(healthCheck);
+    const status = mongoose.connection.readyState === 1 ? 200 : 503;
+    res.status(status).json(healthCheck);
 });
 
 // API Routes
